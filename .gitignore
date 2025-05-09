@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.vscode/
+.env
+*.db
+*.sqlite
+__logs__/
+*.mp3
+*.png
+*.jpg
+*.json.backup
