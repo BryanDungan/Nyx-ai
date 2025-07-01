@@ -1,10 +1,11 @@
 from datetime import datetime
 from nyx_memory import NyxMemory, MemoryEntry
 
-from seed_core import Emotion, TruthState
+from enums_shared import Emotion, TruthState
+
 import random
 from collections import Counter
-from memory_utils import normalize_emotions, NyxMemory
+from memory_utils import normalize_emotions
 import json
 import os
 from journal_utils import Journal

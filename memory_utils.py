@@ -1,9 +1,8 @@
 # memory_utils.py
-from nyx_memory import NyxMemory, MemoryEntry  # ✅ Add this
+from enums_shared import Emotion, TruthState
 from datetime import datetime
-from seed_core import Emotion, TruthState
-import uuid
-import json
+import uuid, json
+
 
 def normalize_emotions(memory):
     for entry in memory.entries:
@@ -67,3 +66,30 @@ def complete_reflection_fields(entry: dict, author: str = "Nyx") -> dict:
         entry["truth_state"] = TruthState.UNFOLDING
 
     return entry
+
+def emotion_decay(entry_timestamp, now=None, decay_rate=0.1):
+    now = now or datetime.now()
+    delta_days = (now - entry_timestamp).days
+    return max(0.0, 1.0 - (delta_days * decay_rate))
+
+def weighted_emotional_profile(entries):
+    from collections import defaultdict
+    now = datetime.now()
+    mood_weights = defaultdict(float)
+
+    for e in entries:
+        if not e.emotion or not e.timestamp:
+            continue
+        try:
+            entry_time = (
+                datetime.fromisoformat(e.timestamp)
+                if isinstance(e.timestamp, str)
+                else e.timestamp
+            )
+            decay = emotion_decay(entry_time, now)
+            key = e.emotion.name if isinstance(e.emotion, Emotion) else str(e.emotion).upper()
+            mood_weights[key] += decay
+        except Exception as ex:
+            print(f"⚠️ Decay calculation failed: {ex}")
+
+    return dict(sorted(mood_weights.items(), key=lambda x: -x[1]))

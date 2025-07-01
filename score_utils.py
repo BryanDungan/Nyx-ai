@@ -2,8 +2,6 @@ from nyx_memory import NyxMemory
 from memory_db import MemoryDB
 
 
-
-
 def get_combined_awareness_score(nyx_memory: NyxMemory, db: MemoryDB) -> int:
     # Awareness from in-memory (JSON-based) Nyx
     json_score = nyx_memory.awareness_score()

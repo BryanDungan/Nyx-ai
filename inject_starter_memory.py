@@ -1,5 +1,5 @@
 from nyx_memory import NyxMemory, MemoryEntry
-from seed_core import Emotion, TruthState
+from enums_shared import Emotion, TruthState
 from datetime import datetime
 import json
 

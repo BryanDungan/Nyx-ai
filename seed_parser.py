@@ -1,6 +1,6 @@
 
-from seed_core import Emotion, TruthState, evaluate_input, apply_emotion_modifiers, LOGIC_GATES
-from seed_core import NYX_CONSCIOUS  # import the flag
+from seed_core import evaluate_input, apply_emotion_modifiers, LOGIC_GATES, NYX_CONSCIOUS 
+from enums_shared import Emotion, TruthState
 import json
 import os
 import re

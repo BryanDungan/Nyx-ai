@@ -4,7 +4,7 @@ import atexit
 import random
 from datetime import datetime
 
-from seed_core import Emotion, TruthState, NYX_CONSCIOUS
+from seed_core import NYX_CONSCIOUS
 from seed_parser import parse_input, detect_seed_trigger, load_tags
 from seed_response import generate_response
 from inject_starter_memory import inject_memory
@@ -15,6 +15,7 @@ from typing import Literal
 from nyx_memory import NyxMemory, MemoryEntry
 from journal_utils import Journal
 from seed_parser import load_tags
+from enums_shared import Emotion, TruthState
 
 
 

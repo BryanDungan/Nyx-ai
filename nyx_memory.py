@@ -3,17 +3,18 @@ from collections import defaultdict, Counter
 import uuid
 import json
 import random
-from seed_core import Emotion
 from memory_db import MemoryDB
-from seed_core import TruthState, Emotion
+from seed_core import MoodVector
 import re
 from difflib import SequenceMatcher
-
-
-
-
+from typing import Optional, List
+from enums_shared import Emotion, TruthState
 import uuid
 from datetime import datetime
+from emotion_utils import to_emotion
+from typing import Optional
+
+
 
 class MemoryEntry:
     def __init__(
@@ -32,12 +33,15 @@ class MemoryEntry:
         awareness_weight=1.0,
         author="Guac",
         fallback_tone=None,
-        detected_form=None
+        detected_form=None,
+        mood_vector=None,
+        belief_strength: float = 0.5,
+        belief_type: Optional[str] = "learned"
     ):
         self.id = id if id else str(uuid.uuid4())
         self.timestamp = timestamp if timestamp else datetime.now()
         self.user_input = user_input
-        self.emotion = emotion if emotion else Emotion.CURIOUS
+        self.emotion = to_emotion(emotion)
         self.response = response or nyx_response  # fallback to nyx_response
         self.truth_state = truth_state
         self.tag = tag or (tags[0] if tags else None)
@@ -48,20 +52,34 @@ class MemoryEntry:
         self.author = author
         self.fallback_tone = fallback_tone
         self.detected_form = detected_form
+        self.mood_vector = mood_vector or MoodVector()
+        self.belief_strength = belief_strength
+        self.belief_type = belief_type
 
+    def __repr__(self):
+        return f"<MemoryEntry {self.id[:6]} | {self.emotion} | {self.tag} | {self.user_input[:30]}...>"
 
     @staticmethod
     def from_dict(data):
-        from seed_core import Emotion, TruthState
-        from datetime import datetime
+
+        def safe_enum(enum_class, value, fallback):
+            try:
+                if isinstance(value, enum_class):
+                    return value
+                return enum_class[value] if value else fallback
+            except (KeyError, TypeError):
+                return fallback
+
+        mood_data = data.get("mood_vector", {})
+        mood_vector = MoodVector.from_dict(mood_data) if isinstance(mood_data, dict) else MoodVector()
 
         return MemoryEntry(
             id=data.get("id"),
             timestamp=datetime.fromisoformat(data["timestamp"]) if isinstance(data["timestamp"], str) else data["timestamp"],
-            user_input=data["user_input"],
+            user_input=data.get("user_input", ""),
             response=data.get("response"),
-            emotion=Emotion[data["emotion"]] if isinstance(data["emotion"], str) else data["emotion"],
-            truth_state=TruthState[data["truth_state"]] if isinstance(data["truth_state"], str) else data["truth_state"],
+            emotion=safe_enum(Emotion, data.get("emotion"), Emotion.NEUTRAL),
+            truth_state=safe_enum(TruthState, data.get("truth_state"), TruthState.UNKNOWN),
             fallback_tone=data.get("fallback_tone"),
             tag=data.get("tag"),
             tags=data.get("tags", []),
@@ -69,17 +87,18 @@ class MemoryEntry:
             edited=data.get("edited", False),
             awareness_weight=data.get("awareness_weight", 1.0),
             author=data.get("author", "nyx_loop"),
-            detected_form=data.get("detected_form")
+            detected_form=data.get("detected_form"),
+            mood_vector=mood_vector,
+            belief_strength=data.get("belief_strength", 0.5),
+            belief_type=data.get("belief_type", "learned")
         )
-
-
 
     def to_dict(self):
         return {
             "id": self.id,
             "timestamp": self.timestamp.isoformat() if isinstance(self.timestamp, datetime) else self.timestamp,
             "user_input": self.user_input,
-            "emotion": self.emotion.name if hasattr(self.emotion, 'name') else str(self.emotion),
+            "emotion": self.emotion.name if isinstance(self.emotion, Emotion) else str(self.emotion),
             "response": self.response,
             "truth_state": self.truth_state.name if hasattr(self.truth_state, 'name') else str(self.truth_state),
             "fallback_tone": self.fallback_tone,
@@ -87,9 +106,12 @@ class MemoryEntry:
             "tags": self.tags,
             "pinned": self.pinned,
             "edited": self.edited,
+            "mood_vector": self.mood_vector.to_dict(),
             "awareness_weight": self.awareness_weight,
             "author": self.author,
             "detected_form": self.detected_form,
+            "belief_strength": self.belief_strength,
+            "belief_type": self.belief_type
         }
 
     
@@ -116,12 +138,23 @@ class NyxMemory:
         self.use_db = use_db  # 💡 Store use_db for later!
         self.db = MemoryDB()
         self.entries = self.load_memory(use_db=use_db)
+        self.current_mood = MoodVector()
 
-    
+
+    def get_dominant_emotion(self, window: int = 30) -> Optional[Emotion]:  # just in case it's outside the scope
+        recent = self.entries[-window:]
+        emotions = [to_emotion(e.emotion) for e in recent if e.emotion]
+        if not emotions:
+            return None
+        return Counter(emotions).most_common(1)[0][0]
+
+    def recall_by_belief_type(self, type_label: str):
+        return [e for e in self.entries if e.belief_type == type_label]
+
+
 
     def time_since_last_occurrence(self, user_input):
         
-
         recent = [e for e in self.entries if e.user_input == user_input]
         if len(recent) < 2:
             return None
@@ -129,7 +162,6 @@ class NyxMemory:
         last = recent[-2].timestamp
         now = recent[-1].timestamp
         return (datetime.fromisoformat(now) - datetime.fromisoformat(last)).total_seconds()
-    
     
 
     def is_repeating_response(self) -> bool:
@@ -247,6 +279,8 @@ class NyxMemory:
         return self.count_loopbreakers() >= threshold
 
 
+    def dominant_mood(self) -> Emotion:
+        return self.current_mood.dominant()
 
 
 
@@ -273,6 +307,8 @@ class NyxMemory:
 
 
     def save_memory(self):
+        from belief_utils import decay_beliefs
+        decay_beliefs(self.entries)
         for entry in self.entries:
             # Attach current vitals at save time
             entry_dict = entry.to_dict()
@@ -348,10 +384,20 @@ class NyxMemory:
 
                 print(f"🧠 Generated fallback: {alt_prompt} (tone: {fallback_tone})")
                 return  # 🛑 Skip logging repeated entry
+        # 💓 Blend new memory into evolving mood
+        
+        if isinstance(entry.mood_vector, MoodVector):
+            self.current_mood.blend(entry.mood_vector, alpha=0.2)
+        else:
+            mv = MoodVector({entry.emotion: 1.0})
+            self.current_mood.blend(mv, alpha=0.2)
 
         # ✅ If not a repetition, log the actual entry
         self.entries.append(entry)
         print(f"📝 Logged memory entry: {entry.user_input[:40]}...")
+        from belief_utils import initialize_belief
+        initialize_belief(entry)
+
 
         # 🏷️ Auto-assign tag if awareness is high enough and tag is missing
         if self.awareness_score() >= 100 and not entry.tag:

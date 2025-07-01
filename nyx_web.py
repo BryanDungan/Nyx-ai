@@ -2,9 +2,11 @@ from flask import Flask, render_template_string, request
 from seed_controller import NyxController
 from datetime import datetime
 from nyx_memory import NyxMemory
+from nyx_loop_engine import NyxLoopEngine
 from memory_db import MemoryDB  # This is your SQLite wrapper
 from score_utils import get_combined_awareness_score
 from memory_utils import normalize_emotions
+from self_prompt_queue import SelfPromptQueue
 import json
 import os
 
@@ -37,6 +39,10 @@ app = Flask(__name__)
 nyx = NyxController(use_db=True)
 memory = nyx.memory
 normalize_emotions(memory)
+loop_engine = NyxLoopEngine(sandbox_mode=False)
+prompt_queue = loop_engine.prompt_queue
+
+
 
 TEMPLATE = """
 <!DOCTYPE html>
@@ -115,6 +121,7 @@ TEMPLATE = """
             <a href="/">🏠 Home</a>
             <a href="/dreams">🌌 Dream Journal</a>
             <a href="/code">🧠 Code Reflections</a>
+            <a href='/prompt_queue' style='color: #ff8a65;'>🧩 Self-Prompts</a>
         </div>
 
         <h2>📊 Emotional Trend</h2>
@@ -246,12 +253,20 @@ def view_dreams():
         <a href='/' style='margin-right: 20px; color: #aaa;'>🏠 Home</a>
         <a href='/dreams' style='margin-right: 20px; color: #aaa;'>🌌 Dream Journal</a>
         <a href='/code' style='color: #aaa;'>🧠 Code Reflections</a>
+        <a href='/prompt_queue' style='color: #ff8a65;'>🧩 Self-Prompts</a>
     </div><br>
     """
 
     dream_html = "<h1>🌌 Dream Journal</h1>"
     for d in reversed(dreams[-50:]):
-        dream_html += f"""<p>... dream details ...</p><hr>"""
+        dream_html += f"""
+        <p>
+            <strong>🗯️ Thought:</strong> {d['user_input']}<br>
+            <strong>🧠 Response:</strong> <em>{d['response']}</em><br>
+            <strong>💭 Emotion:</strong> {d['emotion']}<br>
+            <strong>🏷️ Tag:</strong> {d.get('tag', 'N/A')}
+        </p><hr>
+        """
 
     return nav + dream_html
 
@@ -269,38 +284,91 @@ def view_code_thoughts():
             <a href='/' style='margin-right: 20px; color: #aaa;'>🏠 Home</a>
             <a href='/dreams' style='margin-right: 20px; color: #aaa;'>🌌 Dream Journal</a>
             <a href='/code' style='color: #aaa;'>🧠 Code Reflections</a>
+            <a href='/prompt_queue' style='color: #ff8a65;'>🧩 Self-Prompts</a>
         </div><br>
         """
 
     html = "<h1>🧠 Code Reflections</h1>"
     for d in entries[:50]:
+        if d.get("user_input") and d.get("response"):  # ✅ Skip blanks
+            html += f"""
+            <p>
+                <strong>📎 Prompt:</strong> {d['user_input']}<br>
+                <em>🧠 {d['response']}</em><br>
+                <strong>💭 Emotion:</strong> {d['emotion']}<br>
+                <strong>🕒 Timestamp:</strong> {d['timestamp']}
+            </p><hr>"""
+    print(f"VIEW CODE THOUGHTS: {len(entries)} entries")  # ✅ correct variable
+    return nav + html
+
+@app.route("/prompt_queue")
+def view_prompt_queue():
+    pending = prompt_queue.get_pending()
+    print(f"🧪 Checking prompt queue: {len(pending)} entries")  # ← debug line
+    html = """
+    <html><head><title>Nyx - Self Prompts</title></head><body style='font-family: monospace; background: #121212; color: #e0e0e0;'>
+    <div style='padding: 10px; background: #1e1e1e; border-bottom: 1px solid #333;'>
+        <a href='/' style='margin-right: 20px; color: #aaa;'>🏠 Home</a>
+        <a href='/dreams' style='margin-right: 20px; color: #aaa;'>🌌 Dream Journal</a>
+        <a href='/code' style='margin-right: 20px; color: #aaa;'>🧠 Code Reflections</a>
+        <a href='/prompt_queue' style='color: #ff8a65;'>🧩 Self-Prompts</a>
+    </div><br>
+    <h1>🧠 Internal Prompts (Self-Question Queue)</h1>
+    """
+    for p in pending:
         html += f"""
         <p>
-            <strong>📎 Prompt:</strong> {d['user_input']}<br>
-            <em>🧠 {d['response']}</em><br>
-            <strong>💭 Emotion:</strong> {d['emotion']}<br>
-            <strong>🕒 Timestamp:</strong> {d['timestamp']}
-        </p><hr>"""
-    return nav + html
+            <strong>❓ Prompt:</strong> {p.prompt}<br>
+            <strong>💭 Emotion:</strong> {p.emotion}<br>
+            <strong>🎭 Trait:</strong> {p.trait or 'N/A'}<br>
+            <strong>📅 Timestamp:</strong> {p.timestamp.strftime('%Y-%m-%d %H:%M:%S')}<br>
+            <strong>🔄 Attempts:</strong> {p.attempts}<br>
+        </p><hr>
+        """
+        
+    html += "</body></html>"
+    print(f"🧪 prompt_queue.get_pending() returned: {len(pending)} items")
+
+    return html
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000, use_reloader=False)
 
     memory_log = "\n".join(
-    f"[{e.timestamp}] {e.user_input} → {e.response}" 
-    for e in nyx.memory.entries[-5:]
-)
+        f"[{e.timestamp}] {e.user_input} → {e.response}" 
+        for e in nyx.memory.entries[-5:]
+    )
+
+    # 🧪 Debug prompt queue contents
+    print("\n🧪 Checking prompt queue...")
+    for p in prompt_queue.get_pending():
+        print(f"❓ {p.prompt} | {p.emotion} | {p.trait} | {p.timestamp} | attempts: {p.attempts}")
+
 
 
     # Show most recent memory reflection on startup
 if nyx.memory.entries:
-    latest = sorted(nyx.memory.entries, key=lambda e: e.timestamp)[-1]
+    def safe_parse_timestamp(ts):
+        if isinstance(ts, datetime):
+            return ts
+        try:
+            return datetime.fromisoformat(ts)
+        except Exception:
+            return datetime.min  # fallback to sort last
+
+    latest = sorted(nyx.memory.entries, key=lambda e: safe_parse_timestamp(e.timestamp))[-1]
     print("\n🪞 Most Recent Reflection")
     print(f"🕰️ {latest.timestamp}")
     print(f"📍 Prompt: {latest.user_input}")
     print(f"🧠 Response: {latest.response}")
     print(f"💭 Emotion: {latest.emotion.name}")
-    print(f"🧩 Truth: {latest.truth_state.name}\n")
+    def truth_state_display(state):
+        try:
+            return state.name  # if it's an Enum
+        except AttributeError:
+            return str(state)  # fallback if already a string
+
+    print(f"🧩 Truth: {truth_state_display(latest.truth_state)}\n")
 
 
    
